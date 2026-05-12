@@ -8,6 +8,16 @@ clients.
 
 This project is unofficial and is not affiliated with or endorsed by Proxmox Server Solutions GmbH.
 
+## What NodePilot Can Do
+
+- Inspect Proxmox nodes, cluster resources, guests, storage, tasks, services, network interfaces,
+  firewall rules, and apt updates.
+- Create, clone, configure, start, stop, reboot, snapshot, roll back, back up, and delete QEMU VMs.
+- Create, configure, start, stop, reboot, snapshot, roll back, back up, and delete LXC containers.
+- Download ISO images, LXC templates, and cloud disk images into Proxmox storage.
+- Build cloud-init VMs from existing templates or directly from cloud image URLs.
+- Call raw Proxmox API endpoints through `proxmox_api_request` when a curated tool does not exist.
+
 ## Safety
 
 NodePilot can expose destructive Proxmox operations, including guest deletion, guest power actions,
@@ -22,6 +32,52 @@ Recommended public deployment posture:
 - Use a dedicated Proxmox API token with only the permissions you need.
 - Avoid exposing the HTTP transport to untrusted networks.
 - Rotate the token if it is ever pasted into chat, logs, screenshots, or source control.
+
+## How It Works
+
+NodePilot runs locally or on an internal automation host. MCP clients talk to NodePilot over stdio
+or Streamable HTTP. NodePilot then calls the Proxmox VE HTTPS API using a Proxmox API token.
+
+```mermaid
+flowchart LR
+    user["Operator"] --> client["MCP Client<br/>(Claude, Codex, custom agent)"]
+    client -->|"MCP tool call"| nodepilot["NodePilot<br/>FastMCP server"]
+    nodepilot -->|"HTTPS REST<br/>PVEAPIToken"| proxmox["Proxmox VE API"]
+    proxmox --> nodes["Nodes"]
+    proxmox --> qemu["QEMU VMs"]
+    proxmox --> lxc["LXC Containers"]
+    proxmox --> storage["Storage"]
+    proxmox --> tasks["Tasks"]
+    nodepilot -->|"structured result"| client
+```
+
+Long-running Proxmox operations return UPIDs. NodePilot polls the task endpoint and returns the
+completed status to the MCP client.
+
+```mermaid
+sequenceDiagram
+    participant C as MCP Client
+    participant N as NodePilot
+    participant P as Proxmox API
+
+    C->>N: proxmox_create_cloudinit_vm_from_image(...)
+    N->>P: enable storage import content if requested
+    N->>P: download cloud image URL
+    P-->>N: UPID
+    N->>P: poll /nodes/{node}/tasks/{upid}/status
+    N->>P: create QEMU VM with import-from
+    N->>P: apply cloud-init config
+    N->>P: start VM
+    N->>P: query QEMU guest-agent network interfaces
+    N-->>C: VMID, task status, IP, SSH command, warnings
+```
+
+## Requirements
+
+- Python 3.11+
+- [`uv`](https://docs.astral.sh/uv/)
+- Proxmox VE reachable over HTTPS
+- A Proxmox API token with permissions for the tools you plan to use
 
 ## Setup
 
@@ -39,6 +95,9 @@ pveum user add nodepilot@pve
 pveum user token add nodepilot@pve mcp -comment "NodePilot MCP token"
 ```
 
+Grant the token only the privileges needed for your intended workflow. Read-only inventory use can
+be scoped much more tightly than VM/container creation or raw API control.
+
 Copy `.env.example` to `.env` and set the token value. Proxmox shows the token secret only once.
 
 ```text
@@ -53,7 +112,7 @@ PROXMOX_VERIFY_SSL=false
 Set `PROXMOX_VERIFY_SSL=true` when your Proxmox host has a certificate trusted by the machine
 running NodePilot.
 
-## Run
+## Running NodePilot
 
 Default stdio MCP transport:
 
@@ -93,6 +152,8 @@ For a stdio MCP client:
 }
 ```
 
+For local development, replace `/path/to/nodepilot` with the absolute path to your checkout.
+
 Read-only test prompt:
 
 ```text
@@ -108,7 +169,7 @@ carefully before approving them.
 NodePilot includes curated tools for common operations and `proxmox_api_request` for Proxmox
 endpoints not yet wrapped by a first-class tool.
 
-Storage helpers:
+### Storage
 
 ```text
 proxmox_list_storage
@@ -129,7 +190,7 @@ Cloud disk images are different from installer ISOs. Use `proxmox_download_cloud
 the cloud image must allow Proxmox `import` content. `proxmox_ensure_storage_content` can add that
 content type to a storage such as `local`.
 
-LXC helpers:
+### LXC Containers
 
 ```text
 proxmox_validate_lxc_config
@@ -142,7 +203,7 @@ Proxmox restricts some LXC feature flags to the exact `root@pam` account. When c
 through an API token, NodePilot preserves token-safe `nesting=1` and returns warnings for skipped
 flags such as `keyctl=1`, `mknod=1`, `fuse=1`, `mount=...`, and `force_rw_sys=1`.
 
-Cloud-init VM helpers:
+### Cloud-Init VMs
 
 ```text
 proxmox_create_cloudinit_vm
@@ -179,6 +240,8 @@ Example:
 Successful responses include the VMID, IP address when reported by guest agent, and an SSH command
 such as `ssh demo@10.0.0.55`.
 
+### Raw API
+
 Useful raw API examples:
 
 ```json
@@ -187,6 +250,20 @@ Useful raw API examples:
 {"method": "POST", "path": "/nodes/pve-node-1/qemu/100/status/shutdown"}
 {"method": "DELETE", "path": "/nodes/pve-node-1/qemu/128", "params": {"purge": true}}
 ```
+
+Use `proxmox_api_request` carefully. It exists so the full Proxmox API remains reachable, but it
+can bypass the intent and guardrails of curated tools.
+
+## Development
+
+Run the local MCP server:
+
+```bash
+uv run nodepilot
+```
+
+List tools with an MCP inspector/client, then start with read-only tools before testing mutating
+workflows.
 
 ## Tests
 
