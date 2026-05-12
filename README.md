@@ -6,8 +6,6 @@ NodePilot is a Python MCP server that exposes Proxmox VE inventory, QEMU VM, LXC
 storage, task, service, network, firewall, apt, snapshot, backup, and raw API operations to MCP
 clients.
 
-This project is unofficial and is not affiliated with or endorsed by Proxmox Server Solutions GmbH.
-
 ## What NodePilot Can Do
 
 - Inspect Proxmox nodes, cluster resources, guests, storage, tasks, services, network interfaces,
